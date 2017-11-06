@@ -1,0 +1,177 @@
+= Downloading large data using mbed-telit-modem
+Vengatesh.s
+
+== Connection
+
+image::figures/connection.png[align="center"]
+
+== mbed-telit-modem
+
+=== Right
+
+image::figures/serial.png[align="center",width="50%"]
+
+=== Left
+
+------
+AT
+OK
+
+AT#GPRS=1
++IP 192.112.0.123
+OK
+------
+
+== mbed-telit-modem
+
+=== Right
+
+image::figures/atparser.png[align="center",width="50%"]
+
+=== Left
+
+[source, cpp]
+------
+ATParser parser(&serial);
+
+parser.send("AT") && parser.recv("OK");
+------
+
+------
+AT> AT
+AT< OK?
+AT= OK
+------
+
+== mbed-telit-modem
+
+=== Right
+
+image::figures/telit.png[align="center",width="50%"]
+
+=== Left
+
+[source, cpp]
+------
+bool gprs_connect(char* ip)
+{
+  _parser.setTimeout(TELIT_GPRS_TIMEOUT);
+  return _parser.send("AT#GPRS=1")
+        &&_parser.recv("+IP: %15s%*[\r]", ip)
+        && _parser.recv("OK");
+}
+------
+
+== mbed-telit-modem
+
+=== Right
+
+image::figures/telit-interface.png[align="center",width="50%"]
+
+=== Left
+
+[source, cpp]
+------
+int connect()
+{
+  _telit.gprs_disconnect();
+  
+  if(!_telit.gprs_config("IP", _apn, _username, _password)) {
+    return -1;
+  }
+
+  if (!_telit.gprs_connect(_ip_buffer)) {
+    return -1;
+  }
+
+  return 1;
+}
+------
+
+== Socket SEND/RECEIVE
+
+* 'AT#SSEND' - allows to send data through a connected socket
+
+------
+AT#SSEND
+> hello world (Ctrl-Z)
+------
+
+* 'SRING' unsolicited mode
+
+------
+SRING: <connId>, <recData>, <data>
+------
+
+image::figures/packet.png[align="center",width="50%"]
+
+
+[source, cpp]
+------
+void _packet_handler()
+{
+   int id;
+   uint32_t amount;
+
+   if (!_parser.recv(",%d,%d:", &id, &amount)) {
+      return;
+   }
+
+   struct packet *packet = (struct packet*)malloc(sizeof(struct packet) + amount);
+    if (!packet) {
+        return;
+    }
+
+   packet->id = id;
+   packet->len = amount;
+   packet->next = 0;
+
+   if (!(_parser.read((char *)(packet + 1), amount))) {
+      free(packet);
+      return;
+   }
+   *_packets_end = packet;
+   _packets_end = &packet->next;
+}
+------
+
+== Solution
+
+* 'AT#SRECV' command permits the user to read data arrived through a connected socket.
+------
+AT#SRECV=<connID, maxByte>
+
+AT#SRECV=1,15
+#SRECV: 1,15
+hello world!
+OK
+------
+
+[source, cpp]
+------
+void socket_recv(int sockid, void *data, uint32_t amount)
+{
+    int status;
+
+    // socket info AT#SI=1, #SI:<sockid>,<sentBytes>,<readBytes>,<len>,<ack>
+    _parser.send("AT#SI=%d", sockid)
+        && _parser.recv("#SI: %*d,%*d,%*d,%u,%*d", &len)
+        && _parser.recv("OK");
+
+    if (len != 0) {
+        _parser.recv("AT#SRECV=%d,%d", sockid, amount)
+              && _parser.read((char*)data, amount)
+              && _parser.recv("OK");
+
+        return amount;
+    }
+    
+    status = sock_status(sockid);
+    if (status == 0)
+       return 0;
+
+    return -1;
+}
+------
+
+== Thank you
